@@ -1,9 +1,9 @@
 /* tslint:disable:max-classes-per-file */
 import {
-  BoundPrivateKeyData,
+  NodePrivateKeyData,
   PrivateKeyData,
   PrivateKeyStore,
-  UnboundPrivateKeyData,
+  SubsequentSessionPrivateKeyData,
 } from '@relaycorp/relaynet-core';
 import axios, { AxiosInstance } from 'axios';
 import { Agent as HttpAgent } from 'http';
@@ -46,14 +46,15 @@ export class VaultPrivateKeyStore extends PrivateKeyStore {
   protected async saveKey(privateKeyData: PrivateKeyData, keyId: string): Promise<void> {
     const dhPrivateKeyBase64 = base64Encode(privateKeyData.keyDer);
     const certificate =
-      (privateKeyData as UnboundPrivateKeyData).certificateDer !== undefined
-        ? base64Encode((privateKeyData as UnboundPrivateKeyData).certificateDer)
+      (privateKeyData as NodePrivateKeyData).certificateDer !== undefined
+        ? base64Encode((privateKeyData as NodePrivateKeyData).certificateDer)
         : undefined;
     const requestBody = {
       data: {
         certificate,
         privateKey: dhPrivateKeyBase64,
-        recipientPublicKeyDigest: (privateKeyData as BoundPrivateKeyData).recipientPublicKeyDigest,
+        recipientPublicKeyDigest: (privateKeyData as SubsequentSessionPrivateKeyData)
+          .recipientPublicKeyDigest,
         type: privateKeyData.type,
       },
     };
