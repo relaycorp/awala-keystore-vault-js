@@ -51,7 +51,7 @@
     "access": "public"
   },
   "devDependencies": {
-    "@relaycorp/shared-config": "^1.5.0",
+    "@relaycorp/shared-config": "^1.6.0",
     "@types/jest": "^26.0.24",
     "@types/verror": "^1.10.5",
     "buffer-to-arraybuffer": "0.0.6",
@@ -68,7 +68,7 @@
   },
   "dependencies": {
     "@relaycorp/relaynet-core": "^1.49.7",
-    "axios": "^0.21.1"
+    "axios": "^0.21.2"
   },
   "peerDependencies": {
     "@relaycorp/relaynet-core": ">= 1.27.0 < 2"
