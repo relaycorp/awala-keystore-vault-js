@@ -35,7 +35,7 @@ await keyStore.saveNodeKey(identityKeyPair.privateKey, identityCertificate);
 To add an initial session key for your own node, use `VaultPrivateKeyStore.saveInitialSessionKey();`. For example:
 
 ```typescript
-await keyStore.saveInitialSessionKey(sessionKeyPair.privateKey, sessionCertificate);
+await keyStore.saveInitialSessionKey(sessionKeyPair.privateKey, sessionKeyId);
 ```
 
 ### Signing a RAMF message
