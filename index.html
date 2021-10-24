@@ -2745,7 +2745,7 @@ img {
 				<h3>Adding an initial session key</h3>
 			</a>
 			<p>To add an initial session key for your own node, use <code>VaultPrivateKeyStore.saveInitialSessionKey();</code>. For example:</p>
-			<pre><code class="language-typescript"><span style="color: #AF00DB">await</span><span style="color: #000000"> </span><span style="color: #001080">keyStore</span><span style="color: #000000">.</span><span style="color: #795E26">saveInitialSessionKey</span><span style="color: #000000">(</span><span style="color: #001080">sessionKeyPair</span><span style="color: #000000">.</span><span style="color: #001080">privateKey</span><span style="color: #000000">, </span><span style="color: #001080">sessionCertificate</span><span style="color: #000000">);</span>
+			<pre><code class="language-typescript"><span style="color: #AF00DB">await</span><span style="color: #000000"> </span><span style="color: #001080">keyStore</span><span style="color: #000000">.</span><span style="color: #795E26">saveInitialSessionKey</span><span style="color: #000000">(</span><span style="color: #001080">sessionKeyPair</span><span style="color: #000000">.</span><span style="color: #001080">privateKey</span><span style="color: #000000">, </span><span style="color: #001080">sessionKeyId</span><span style="color: #000000">);</span>
 </code></pre>
 			<a href="#signing-a-ramf-message" id="signing-a-ramf-message" style="color: inherit; text-decoration: none;">
 				<h3>Signing a RAMF message</h3>
