@@ -1,4 +1,5 @@
 /* tslint:disable:max-classes-per-file */
+
 import {
   NodePrivateKeyData,
   PrivateKeyData,
@@ -52,9 +53,8 @@ export class VaultPrivateKeyStore extends PrivateKeyStore {
     const requestBody = {
       data: {
         certificate,
+        peerPrivateAddress: (privateKeyData as SubsequentSessionPrivateKeyData).peerPrivateAddress,
         privateKey: dhPrivateKeyBase64,
-        recipientPublicKeyDigest: (privateKeyData as SubsequentSessionPrivateKeyData)
-          .recipientPublicKeyDigest,
         type: privateKeyData.type,
       },
     };
@@ -86,7 +86,7 @@ export class VaultPrivateKeyStore extends PrivateKeyStore {
     return {
       certificateDer,
       keyDer: base64Decode(vaultSecret.data.privateKey),
-      recipientPublicKeyDigest: vaultSecret.data.recipientPublicKeyDigest,
+      peerPrivateAddress: vaultSecret.data.peerPrivateAddress,
       type: vaultSecret.data.type,
     };
   }
