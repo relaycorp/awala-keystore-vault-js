@@ -4,6 +4,7 @@ import {
   derSerializePublicKey,
   generateECDHKeyPair,
   generateRSAKeyPair,
+  getPrivateAddressFromIdentityKey,
   issueEndpointCertificate,
   PrivateKeyStoreError,
   UnknownKeyError,
@@ -37,7 +38,7 @@ describe('VaultPrivateKeyStore', () => {
   let senderPrivateKey: CryptoKey;
   let senderCertificate: Certificate;
   let recipientKeyPair: CryptoKeyPair;
-  let recipientCertificate: Certificate;
+  let recipientPrivateAddress: string;
   beforeAll(async () => {
     sessionKeyPair = await generateECDHKeyPair();
 
@@ -50,11 +51,7 @@ describe('VaultPrivateKeyStore', () => {
     });
 
     recipientKeyPair = await generateRSAKeyPair();
-    recipientCertificate = await issueEndpointCertificate({
-      issuerPrivateKey: recipientKeyPair.privateKey,
-      subjectPublicKey: recipientKeyPair.publicKey,
-      validityEndDate: TOMORROW,
-    });
+    recipientPrivateAddress = await getPrivateAddressFromIdentityKey(recipientKeyPair.publicKey);
   });
 
   describe('constructor', () => {
@@ -152,7 +149,7 @@ describe('VaultPrivateKeyStore', () => {
       await store.saveSubsequentSessionKey(
         sessionKeyPair.privateKey,
         sessionKeyId,
-        recipientCertificate,
+        recipientPrivateAddress,
       );
 
       expect(mockAxiosClient.post).toBeCalledTimes(1);
@@ -177,14 +174,11 @@ describe('VaultPrivateKeyStore', () => {
       await store.saveSubsequentSessionKey(
         sessionKeyPair.privateKey,
         sessionKeyId,
-        recipientCertificate,
+        recipientPrivateAddress,
       );
 
       const postCallArgs = mockAxiosClient.post.mock.calls[0];
-      expect(postCallArgs[1]).toHaveProperty(
-        'data.recipientPublicKeyDigest',
-        sha256Hex(await derSerializePublicKey(await recipientCertificate.getPublicKey())),
-      );
+      expect(postCallArgs[1]).toHaveProperty('data.peerPrivateAddress', recipientPrivateAddress);
     });
 
     test('Certificate should be saved if key is unbound', async () => {
@@ -259,10 +253,8 @@ describe('VaultPrivateKeyStore', () => {
       mockAxiosClient.get.mockResolvedValueOnce(
         makeVaultGETResponse(
           {
+            peerPrivateAddress: recipientPrivateAddress,
             privateKey: base64Encode(await derSerializePrivateKey(sessionKeyPair.privateKey)),
-            recipientPublicKeyDigest: sha256Hex(
-              await derSerializePublicKey(recipientKeyPair.publicKey),
-            ),
             type: 'session-subsequent',
           },
           200,
@@ -276,7 +268,7 @@ describe('VaultPrivateKeyStore', () => {
     test('Endpoint path should be the key id', async () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
-      await store.fetchSessionKey(sessionKeyId, recipientCertificate);
+      await store.fetchSessionKey(sessionKeyId, recipientPrivateAddress);
 
       expect(mockAxiosClient.get).toBeCalledTimes(1);
       const getCallArgs = mockAxiosClient.get.mock.calls[0];
@@ -286,7 +278,7 @@ describe('VaultPrivateKeyStore', () => {
     test('Private key should be returned', async () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
-      const privateKey = await store.fetchSessionKey(sessionKeyId, recipientCertificate);
+      const privateKey = await store.fetchSessionKey(sessionKeyId, recipientPrivateAddress);
 
       expectBuffersToEqual(
         await derSerializePrivateKey(privateKey),
@@ -327,7 +319,10 @@ describe('VaultPrivateKeyStore', () => {
       });
       // We can tell the digest was returned because it was checked:
       await expect(
-        store.fetchSessionKey(sessionKeyId, differentRecipientCertificate),
+        store.fetchSessionKey(
+          sessionKeyId,
+          await differentRecipientCertificate.calculateSubjectPrivateAddress(),
+        ),
       ).rejects.toEqual(
         new UnknownKeyError(
           `Session key ${sessionKeyId.toString('hex')} is bound to another recipient`,
@@ -360,7 +355,7 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expectPromiseToReject(
-        store.fetchSessionKey(sessionKeyId, recipientCertificate),
+        store.fetchSessionKey(sessionKeyId, recipientPrivateAddress),
         new PrivateKeyStoreError(`Failed to retrieve key: Denied`),
       );
     });
@@ -371,7 +366,7 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expect(
-        store.fetchSessionKey(sessionKeyId, recipientCertificate),
+        store.fetchSessionKey(sessionKeyId, recipientPrivateAddress),
       ).rejects.toBeInstanceOf(UnknownKeyError);
     });
 
@@ -381,7 +376,7 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expectPromiseToReject(
-        store.fetchSessionKey(sessionKeyId, recipientCertificate),
+        store.fetchSessionKey(sessionKeyId, recipientPrivateAddress),
         new PrivateKeyStoreError(`Failed to retrieve key: Vault returned a 204 response`),
       );
     });
@@ -393,7 +388,7 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expectPromiseToReject(
-        store.fetchSessionKey(sessionKeyId, recipientCertificate),
+        store.fetchSessionKey(sessionKeyId, recipientPrivateAddress),
         new PrivateKeyStoreError(
           `Failed to retrieve key: Vault returned a 204 response (${errorMessages.join(', ')})`,
         ),
