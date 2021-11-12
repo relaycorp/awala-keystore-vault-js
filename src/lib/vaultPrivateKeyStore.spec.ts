@@ -1,7 +1,6 @@
 import {
   Certificate,
   derSerializePrivateKey,
-  derSerializePublicKey,
   generateECDHKeyPair,
   generateRSAKeyPair,
   getPrivateAddressFromIdentityKey,
@@ -13,7 +12,7 @@ import axios, { AxiosRequestConfig } from 'axios';
 import * as http from 'http';
 import * as https from 'https';
 
-import { expectBuffersToEqual, expectPromiseToReject, sha256Hex } from './_test_utils';
+import { expectBuffersToEqual, expectPromiseToReject } from './_test_utils';
 import { base64Encode } from './utils';
 import { VaultPrivateKeyStore } from './vaultPrivateKeyStore';
 
@@ -296,14 +295,13 @@ describe('VaultPrivateKeyStore', () => {
     });
 
     test('Session key should not be returned if bound to another recipient', async () => {
+      const peerPrivateAddress = await getPrivateAddressFromIdentityKey(recipientKeyPair.publicKey);
       mockAxiosClient.get.mockReset();
       mockAxiosClient.get.mockResolvedValueOnce(
         makeVaultGETResponse(
           {
+            peerPrivateAddress,
             privateKey: base64Encode(await derSerializePrivateKey(sessionKeyPair.privateKey)),
-            recipientPublicKeyDigest: sha256Hex(
-              await derSerializePublicKey(recipientKeyPair.publicKey),
-            ),
             type: 'session-subsequent',
           },
           200,
@@ -312,20 +310,16 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       const differentRecipientKeyPair = await generateRSAKeyPair();
-      const differentRecipientCertificate = await issueEndpointCertificate({
-        issuerPrivateKey: differentRecipientKeyPair.privateKey,
-        subjectPublicKey: differentRecipientKeyPair.publicKey,
-        validityEndDate: TOMORROW,
-      });
+      const differentPeerPrivateAddress = await getPrivateAddressFromIdentityKey(
+        differentRecipientKeyPair.publicKey,
+      );
       // We can tell the digest was returned because it was checked:
       await expect(
-        store.fetchSessionKey(
-          sessionKeyId,
-          await differentRecipientCertificate.calculateSubjectPrivateAddress(),
-        ),
+        store.fetchSessionKey(sessionKeyId, differentPeerPrivateAddress),
       ).rejects.toEqual(
         new UnknownKeyError(
-          `Session key ${sessionKeyId.toString('hex')} is bound to another recipient`,
+          `Session key ${sessionKeyId.toString('hex')} is bound to another recipient ` +
+            `(${peerPrivateAddress}, not ${differentPeerPrivateAddress})`,
         ),
       );
     });
