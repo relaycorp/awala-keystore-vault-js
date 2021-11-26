@@ -333,6 +333,24 @@ describe('VaultPrivateKeyStore', () => {
       ).rejects.toBeInstanceOf(UnknownKeyError);
     });
 
+    test('Non-existing identity key should raise an UnknownKeyError', async () => {
+      mockAxiosClient.get.mockResolvedValue({ status: 404 });
+      const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
+
+      await expect(store.retrieveIdentityKey(privateAddress)).rejects.toBeInstanceOf(
+        UnknownKeyError,
+      );
+    });
+
+    test('Non-existing session key should raise an UnknownKeyError', async () => {
+      mockAxiosClient.get.mockResolvedValue({ status: 404 });
+      const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
+
+      await expect(
+        store.fetchSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
+      ).rejects.toBeInstanceOf(UnknownKeyError);
+    });
+
     test('Axios errors should be wrapped', async () => {
       mockAxiosClient.get.mockRejectedValue(new Error('Denied'));
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
@@ -341,15 +359,6 @@ describe('VaultPrivateKeyStore', () => {
         store.fetchSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
         new PrivateKeyStoreError(`Failed to retrieve key: Denied`),
       );
-    });
-
-    test('A 404 response should raise an UnknownKeyError', async () => {
-      mockAxiosClient.get.mockResolvedValue({ status: 404 });
-      const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
-
-      await expect(
-        store.fetchSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
-      ).rejects.toBeInstanceOf(UnknownKeyError);
     });
 
     test('Any status other than 200 or 404 should raise a PrivateKeyStoreError', async () => {
