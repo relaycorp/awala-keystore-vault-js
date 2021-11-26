@@ -1,5 +1,3 @@
-import { createHash } from 'crypto';
-
 export function expectBuffersToEqual(
   buffer1: Buffer | ArrayBuffer,
   buffer2: Buffer | ArrayBuffer,
@@ -17,8 +15,19 @@ export function expectBuffersToEqual(
   }
 }
 
-export function sha256Hex(plaintext: ArrayBuffer): string {
-  return createHash('sha256').update(Buffer.from(plaintext)).digest('hex');
+export async function getPromiseRejection<E extends Error>(
+  promise: Promise<any>,
+  expectedErrorClass: new (...args: readonly any[]) => E,
+): Promise<E> {
+  try {
+    await promise;
+  } catch (error) {
+    if (!(error instanceof expectedErrorClass)) {
+      throw new Error(`"${error}" does not extend ${expectedErrorClass.name}`);
+    }
+    return error;
+  }
+  throw new Error('Expected project to reject');
 }
 
 export async function expectPromiseToReject(

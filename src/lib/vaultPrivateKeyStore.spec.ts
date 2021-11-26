@@ -1,10 +1,8 @@
 import {
-  Certificate,
   derSerializePrivateKey,
   generateECDHKeyPair,
   generateRSAKeyPair,
   getPrivateAddressFromIdentityKey,
-  issueEndpointCertificate,
   PrivateKeyStoreError,
   UnknownKeyError,
 } from '@relaycorp/relaynet-core';
@@ -12,7 +10,7 @@ import axios, { AxiosRequestConfig } from 'axios';
 import * as http from 'http';
 import * as https from 'https';
 
-import { expectBuffersToEqual, expectPromiseToReject } from './_test_utils';
+import { expectBuffersToEqual, expectPromiseToReject, getPromiseRejection } from './_test_utils';
 import { base64Encode } from './utils';
 import { VaultPrivateKeyStore } from './vaultPrivateKeyStore';
 
@@ -34,20 +32,16 @@ describe('VaultPrivateKeyStore', () => {
 
   const sessionKeyId = Buffer.from([9, 7, 5, 3, 1]);
   let sessionKeyPair: CryptoKeyPair;
-  let senderPrivateKey: CryptoKey;
-  let senderCertificate: Certificate;
+  let identityPrivateKey: CryptoKey;
+  let privateAddress: string;
   let recipientKeyPair: CryptoKeyPair;
   let recipientPrivateAddress: string;
   beforeAll(async () => {
     sessionKeyPair = await generateECDHKeyPair();
 
     const senderKeyPair = await generateRSAKeyPair();
-    senderPrivateKey = senderKeyPair.privateKey;
-    senderCertificate = await issueEndpointCertificate({
-      issuerPrivateKey: senderKeyPair.privateKey,
-      subjectPublicKey: senderKeyPair.publicKey,
-      validityEndDate: TOMORROW,
-    });
+    identityPrivateKey = senderKeyPair.privateKey;
+    privateAddress = await getPrivateAddressFromIdentityKey(senderKeyPair.publicKey);
 
     recipientKeyPair = await generateRSAKeyPair();
     recipientPrivateAddress = await getPrivateAddressFromIdentityKey(recipientKeyPair.publicKey);
@@ -133,19 +127,45 @@ describe('VaultPrivateKeyStore', () => {
     });
   });
 
-  describe('saveKey', () => {
+  describe('Saving', () => {
     const mockAxiosClient = { post: jest.fn(), interceptors: { response: { use: jest.fn() } } };
     beforeEach(() => {
       mockAxiosClient.post.mockReset();
-      mockAxiosClient.post.mockResolvedValueOnce({ status: 204 });
+      mockAxiosClient.post.mockResolvedValue({ status: 204 });
 
-      // @ts-ignore
-      mockAxiosCreate.mockReturnValueOnce(mockAxiosClient);
+      mockAxiosCreate.mockReturnValueOnce(mockAxiosClient as any);
     });
 
-    test('Endpoint path should be the key id', async () => {
+    test('Identity key should be stored', async () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
-      await store.saveSubsequentSessionKey(
+      await store.saveIdentityKey(identityPrivateKey);
+
+      expect(mockAxiosClient.post).toBeCalledTimes(1);
+      const postCallArgs = mockAxiosClient.post.mock.calls[0];
+      expect(postCallArgs[0]).toEqual(`/i-${privateAddress}`);
+      expect(postCallArgs[1]).toHaveProperty(
+        'data.privateKey',
+        base64Encode(await derSerializePrivateKey(identityPrivateKey)),
+      );
+    });
+
+    test('Unbound session key should be stored', async () => {
+      const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
+      await store.saveUnboundSessionKey(sessionKeyPair.privateKey, sessionKeyId);
+
+      expect(mockAxiosClient.post).toBeCalledTimes(1);
+      const postCallArgs = mockAxiosClient.post.mock.calls[0];
+      expect(postCallArgs[0]).toEqual(`/s-${sessionKeyId.toString('hex')}`);
+      expect(postCallArgs[1]).toHaveProperty(
+        'data.privateKey',
+        base64Encode(await derSerializePrivateKey(sessionKeyPair.privateKey)),
+      );
+      expect(postCallArgs[1]).toHaveProperty('data.peerPrivateAddress', undefined);
+    });
+
+    test('Bound session key should be stored', async () => {
+      const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
+      await store.saveBoundSessionKey(
         sessionKeyPair.privateKey,
         sessionKeyId,
         recipientPrivateAddress,
@@ -153,103 +173,75 @@ describe('VaultPrivateKeyStore', () => {
 
       expect(mockAxiosClient.post).toBeCalledTimes(1);
       const postCallArgs = mockAxiosClient.post.mock.calls[0];
-      expect(postCallArgs[0]).toEqual(`/${sessionKeyId.toString('hex')}`);
-    });
-
-    test('Private key and type should be saved', async () => {
-      const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
-      await store.saveNodeKey(senderPrivateKey, senderCertificate);
-
-      const postCallArgs = mockAxiosClient.post.mock.calls[0];
+      expect(postCallArgs[0]).toEqual(`/s-${sessionKeyId.toString('hex')}`);
       expect(postCallArgs[1]).toHaveProperty(
         'data.privateKey',
-        base64Encode(await derSerializePrivateKey(senderPrivateKey)),
+        base64Encode(await derSerializePrivateKey(sessionKeyPair.privateKey)),
       );
-      expect(postCallArgs[1]).toHaveProperty('data.type', 'node');
-    });
-
-    test('Recipient public key digest should be saved if key is bound', async () => {
-      const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
-      await store.saveSubsequentSessionKey(
-        sessionKeyPair.privateKey,
-        sessionKeyId,
-        recipientPrivateAddress,
-      );
-
-      const postCallArgs = mockAxiosClient.post.mock.calls[0];
       expect(postCallArgs[1]).toHaveProperty('data.peerPrivateAddress', recipientPrivateAddress);
     });
 
-    test('Certificate should be saved if key is unbound', async () => {
-      const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
-      await store.saveNodeKey(senderPrivateKey, senderCertificate);
-
-      const postCallArgs = mockAxiosClient.post.mock.calls[0];
-      expect(postCallArgs[1]).toHaveProperty(
-        'data.certificate',
-        base64Encode(await senderCertificate.serialize()),
-      );
-    });
-
     test('Axios errors should be wrapped', async () => {
-      mockAxiosClient.post.mockReset();
-      mockAxiosClient.post.mockRejectedValueOnce(new Error('Denied'));
+      const axiosError = new Error('Denied');
+      mockAxiosClient.post.mockRejectedValue(axiosError);
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
-      await expectPromiseToReject(
-        store.saveNodeKey(senderPrivateKey, senderCertificate),
-        new PrivateKeyStoreError(`Failed to save key: Denied`),
+      const error = await getPromiseRejection(
+        store.saveIdentityKey(identityPrivateKey),
+        PrivateKeyStoreError,
       );
+
+      expect(error.cause()).toEqual(axiosError);
     });
 
     test('A 200 OK response should be treated as success', async () => {
-      mockAxiosClient.post.mockReset();
-      mockAxiosClient.post.mockResolvedValueOnce({ status: 200 });
+      mockAxiosClient.post.mockResolvedValue({ status: 200 });
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
-      await store.saveNodeKey(senderPrivateKey, senderCertificate);
+      await store.saveIdentityKey(identityPrivateKey);
     });
 
     test('A 204 No Content response should be treated as success', async () => {
-      mockAxiosClient.post.mockReset();
-      mockAxiosClient.post.mockResolvedValueOnce({ status: 204 });
+      mockAxiosClient.post.mockResolvedValue({ status: 204 });
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
-      await store.saveNodeKey(senderPrivateKey, senderCertificate);
+      await store.saveIdentityKey(identityPrivateKey);
     });
 
     test('A non-200/204 response should raise an error', async () => {
-      mockAxiosClient.post.mockReset();
-      mockAxiosClient.post.mockResolvedValueOnce({ status: 400, data: {} });
+      mockAxiosClient.post.mockResolvedValue({ status: 400, data: {} });
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
-      await expectPromiseToReject(
-        store.saveNodeKey(senderPrivateKey, senderCertificate),
-        new PrivateKeyStoreError(`Failed to save key: Vault returned a 400 response`),
+      const error = await getPromiseRejection(
+        store.saveIdentityKey(identityPrivateKey),
+        PrivateKeyStoreError,
       );
+
+      expect(error.cause()?.message).toEqual('Vault returned a 400 response');
     });
 
     test('Error messages in 40X/50X responses should be included in error', async () => {
-      mockAxiosClient.post.mockReset();
       const errorMessages: ReadonlyArray<any> = ['foo', 'bar'];
-      mockAxiosClient.post.mockResolvedValueOnce({ status: 400, data: { errors: errorMessages } });
+      mockAxiosClient.post.mockResolvedValue({ status: 400, data: { errors: errorMessages } });
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
-      await expectPromiseToReject(
-        store.saveNodeKey(senderPrivateKey, senderCertificate),
-        new PrivateKeyStoreError(
-          `Failed to save key: Vault returned a 400 response (${errorMessages.join(', ')})`,
-        ),
+      const error = await getPromiseRejection(
+        store.saveIdentityKey(identityPrivateKey),
+        PrivateKeyStoreError,
+      );
+
+      expect(error.cause()?.message).toEqual(
+        `Vault returned a 400 response (${errorMessages.join(', ')})`,
       );
     });
   });
 
-  describe('fetchKey', () => {
+  describe('Retrieval', () => {
     const mockAxiosClient = { get: jest.fn(), interceptors: { response: { use: jest.fn() } } };
 
     beforeEach(async () => {
       mockAxiosClient.get.mockReset();
-      mockAxiosClient.get.mockResolvedValueOnce(
+      mockAxiosClient.get.mockResolvedValue(
         makeVaultGETResponse(
           {
             peerPrivateAddress: recipientPrivateAddress,
@@ -260,8 +252,7 @@ describe('VaultPrivateKeyStore', () => {
         ),
       );
 
-      // @ts-ignore
-      mockAxiosCreate.mockReturnValueOnce(mockAxiosClient);
+      mockAxiosCreate.mockReturnValueOnce(mockAxiosClient as any);
     });
 
     test('Endpoint path should be the key id', async () => {
@@ -289,15 +280,14 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       // We can tell the type was returned because it was checked
-      await expect(store.fetchNodeKey(sessionKeyId)).rejects.toMatchObject({
+      await expect(store.retrieveIdentityKey(privateAddress)).rejects.toMatchObject({
         message: expect.stringMatching(/is not a node key/),
       });
     });
 
     test('Session key should not be returned if bound to another recipient', async () => {
       const peerPrivateAddress = await getPrivateAddressFromIdentityKey(recipientKeyPair.publicKey);
-      mockAxiosClient.get.mockReset();
-      mockAxiosClient.get.mockResolvedValueOnce(
+      mockAxiosClient.get.mockResolvedValue(
         makeVaultGETResponse(
           {
             peerPrivateAddress,
@@ -324,28 +314,8 @@ describe('VaultPrivateKeyStore', () => {
       );
     });
 
-    test('Node certificate should be returned when present', async () => {
-      mockAxiosClient.get.mockReset();
-      mockAxiosClient.get.mockResolvedValueOnce(
-        makeVaultGETResponse(
-          {
-            certificate: base64Encode(senderCertificate.serialize()),
-            privateKey: base64Encode(await derSerializePrivateKey(senderPrivateKey)),
-            type: 'node',
-          },
-          200,
-        ),
-      );
-      const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
-
-      const keyPair = await store.fetchNodeKey(senderCertificate.getSerialNumber());
-
-      expect(keyPair.certificate.isEqual(senderCertificate)).toBeTrue();
-    });
-
     test('Axios errors should be wrapped', async () => {
-      mockAxiosClient.get.mockReset();
-      mockAxiosClient.get.mockRejectedValueOnce(new Error('Denied'));
+      mockAxiosClient.get.mockRejectedValue(new Error('Denied'));
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expectPromiseToReject(
@@ -355,8 +325,7 @@ describe('VaultPrivateKeyStore', () => {
     });
 
     test('A 404 response should raise an UnknownKeyError', async () => {
-      mockAxiosClient.get.mockReset();
-      mockAxiosClient.get.mockResolvedValueOnce({ status: 404 });
+      mockAxiosClient.get.mockResolvedValue({ status: 404 });
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expect(
@@ -365,8 +334,7 @@ describe('VaultPrivateKeyStore', () => {
     });
 
     test('Any status other than 200 or 404 should raise a PrivateKeyStoreError', async () => {
-      mockAxiosClient.get.mockReset();
-      mockAxiosClient.get.mockResolvedValueOnce({ status: 204, data: {} });
+      mockAxiosClient.get.mockResolvedValue({ status: 204, data: {} });
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expectPromiseToReject(
@@ -376,9 +344,8 @@ describe('VaultPrivateKeyStore', () => {
     });
 
     test('Error messages in 40X/50X responses should be included in error', async () => {
-      mockAxiosClient.get.mockReset();
       const errorMessages: ReadonlyArray<any> = ['foo', 'bar'];
-      mockAxiosClient.get.mockResolvedValueOnce({ status: 204, data: { errors: errorMessages } });
+      mockAxiosClient.get.mockResolvedValue({ status: 204, data: { errors: errorMessages } });
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expectPromiseToReject(
