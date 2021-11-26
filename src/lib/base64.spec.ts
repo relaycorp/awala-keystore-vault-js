@@ -1,7 +1,7 @@
 import bufferToArray from 'buffer-to-arraybuffer';
 
 import { expectBuffersToEqual } from './_test_utils';
-import { base64Decode, base64Encode } from './utils';
+import { base64Decode, base64Encode } from './base64';
 
 const valueDecoded = 'hi';
 const valueEncoded = 'aGk=';

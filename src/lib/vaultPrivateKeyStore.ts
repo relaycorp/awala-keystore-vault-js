@@ -1,16 +1,11 @@
 /* tslint:disable:max-classes-per-file */
 
-import {
-  NodePrivateKeyData,
-  PrivateKeyData,
-  PrivateKeyStore,
-  SubsequentSessionPrivateKeyData,
-} from '@relaycorp/relaynet-core';
+import { PrivateKeyStore, SessionPrivateKeyData } from '@relaycorp/relaynet-core';
 import axios, { AxiosInstance } from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 
-import { base64Decode, base64Encode } from './utils';
+import { base64Decode, base64Encode } from './base64';
 
 class VaultStoreError extends Error {
   constructor(message: string, responseErrorMessages?: readonly string[]) {
@@ -19,6 +14,16 @@ class VaultStoreError extends Error {
       : message;
     super(finalErrorMessage);
   }
+}
+
+interface KeyDataEncoded {
+  readonly privateKey: string;
+  readonly peerPrivateAddress?: string;
+}
+
+interface KeyDataDecoded {
+  readonly privateKey: Buffer;
+  readonly peerPrivateAddress?: string;
 }
 
 export class VaultPrivateKeyStore extends PrivateKeyStore {
@@ -44,21 +49,48 @@ export class VaultPrivateKeyStore extends PrivateKeyStore {
     );
   }
 
-  protected async saveKey(privateKeyData: PrivateKeyData, keyId: string): Promise<void> {
-    const dhPrivateKeyBase64 = base64Encode(privateKeyData.keyDer);
-    const certificate =
-      (privateKeyData as NodePrivateKeyData).certificateDer !== undefined
-        ? base64Encode((privateKeyData as NodePrivateKeyData).certificateDer)
-        : undefined;
-    const requestBody = {
-      data: {
-        certificate,
-        peerPrivateAddress: (privateKeyData as SubsequentSessionPrivateKeyData).peerPrivateAddress,
-        privateKey: dhPrivateKeyBase64,
-        type: privateKeyData.type,
-      },
+  protected async saveIdentityKeySerialized(
+    privateAddress: string,
+    keySerialized: Buffer,
+  ): Promise<void> {
+    await this.saveData(keySerialized, `i-${privateAddress}`);
+  }
+
+  protected async saveSessionKeySerialized(
+    keyId: string,
+    keySerialized: Buffer,
+    peerPrivateAddress?: string,
+  ): Promise<void> {
+    await this.saveData(keySerialized, `s-${keyId}`, peerPrivateAddress);
+  }
+
+  protected async retrieveIdentityKeySerialized(privateAddress: string): Promise<Buffer | null> {
+    const keyData = await this.retrieveData(`i-${privateAddress}`);
+    return keyData?.privateKey ?? null;
+  }
+
+  protected async retrieveSessionKeyData(keyId: string): Promise<SessionPrivateKeyData | null> {
+    const keyData = await this.retrieveData(`s-${keyId}`);
+    if (!keyData) {
+      return null;
+    }
+    return {
+      keySerialized: keyData.privateKey,
+      peerPrivateAddress: keyData.peerPrivateAddress,
     };
-    const response = await this.axiosClient.post(`/${keyId}`, requestBody);
+  }
+
+  private async saveData(
+    keySerialized: Buffer,
+    keyId: string,
+    peerPrivateAddress?: string,
+  ): Promise<void> {
+    const keyBase64 = base64Encode(keySerialized);
+    const data: KeyDataEncoded = {
+      peerPrivateAddress,
+      privateKey: keyBase64,
+    };
+    const response = await this.axiosClient.post(`/${keyId}`, { data });
     if (response.status !== 200 && response.status !== 204) {
       throw new VaultStoreError(
         `Vault returned a ${response.status} response`,
@@ -67,7 +99,7 @@ export class VaultPrivateKeyStore extends PrivateKeyStore {
     }
   }
 
-  protected async fetchKey(keyId: string): Promise<PrivateKeyData | null> {
+  private async retrieveData(keyId: string): Promise<KeyDataDecoded | null> {
     const response = await this.axiosClient.get(`/${keyId}`);
 
     if (response.status === 404) {
@@ -80,14 +112,10 @@ export class VaultPrivateKeyStore extends PrivateKeyStore {
       );
     }
 
-    const vaultSecret = response.data.data;
-    const certificateDer =
-      vaultSecret.data.certificate && base64Decode(vaultSecret.data.certificate);
+    const vaultData = response.data.data.data as KeyDataEncoded;
     return {
-      certificateDer,
-      keyDer: base64Decode(vaultSecret.data.privateKey),
-      peerPrivateAddress: vaultSecret.data.peerPrivateAddress,
-      type: vaultSecret.data.type,
+      peerPrivateAddress: vaultData.peerPrivateAddress,
+      privateKey: base64Decode(vaultData.privateKey),
     };
   }
 }
