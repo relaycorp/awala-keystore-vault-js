@@ -5,7 +5,7 @@ import axios, { AxiosInstance } from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 
-import { base64Encode } from './utils';
+import { base64Decode, base64Encode } from './base64';
 
 class VaultStoreError extends Error {
   constructor(message: string, responseErrorMessages?: readonly string[]) {
@@ -14,6 +14,16 @@ class VaultStoreError extends Error {
       : message;
     super(finalErrorMessage);
   }
+}
+
+interface KeyDataEncoded {
+  readonly privateKey: string;
+  readonly peerPrivateAddress?: string;
+}
+
+interface KeyDataDecoded {
+  readonly privateKey: Buffer;
+  readonly peerPrivateAddress?: string;
 }
 
 export class VaultPrivateKeyStore extends PrivateKeyStore {
@@ -55,36 +65,20 @@ export class VaultPrivateKeyStore extends PrivateKeyStore {
   }
 
   protected async retrieveIdentityKeySerialized(privateAddress: string): Promise<Buffer | null> {
-    throw new Error('implement ' + privateAddress);
+    const keyData = await this.retrieveData(`i-${privateAddress}`);
+    return keyData?.privateKey ?? null;
   }
 
-  protected retrieveSessionKeyData(keyId: string): Promise<SessionPrivateKeyData | null> {
-    throw new Error('implement ' + keyId);
+  protected async retrieveSessionKeyData(keyId: string): Promise<SessionPrivateKeyData | null> {
+    const keyData = await this.retrieveData(`s-${keyId}`);
+    if (!keyData) {
+      return null;
+    }
+    return {
+      keySerialized: keyData.privateKey,
+      peerPrivateAddress: keyData.peerPrivateAddress,
+    };
   }
-
-  // protected async fetchKey(keyId: string): Promise<PrivateKeyData | null> {
-  //   const response = await this.axiosClient.get(`/${keyId}`);
-  //
-  //   if (response.status === 404) {
-  //     return null;
-  //   }
-  //   if (response.status !== 200) {
-  //     throw new VaultStoreError(
-  //       `Vault returned a ${response.status} response`,
-  //       response.data.errors,
-  //     );
-  //   }
-  //
-  //   const vaultSecret = response.data.data;
-  //   const certificateDer =
-  //     vaultSecret.data.certificate && base64Decode(vaultSecret.data.certificate);
-  //   return {
-  //     certificateDer,
-  //     keyDer: base64Decode(vaultSecret.data.privateKey),
-  //     peerPrivateAddress: vaultSecret.data.peerPrivateAddress,
-  //     type: vaultSecret.data.type,
-  //   };
-  // }
 
   private async saveData(
     keySerialized: Buffer,
@@ -92,19 +86,37 @@ export class VaultPrivateKeyStore extends PrivateKeyStore {
     peerPrivateAddress?: string,
   ): Promise<void> {
     const keyBase64 = base64Encode(keySerialized);
-    const requestBody = {
-      data: {
-        peerPrivateAddress,
-        privateKey: keyBase64,
-      },
+    const data: KeyDataEncoded = {
+      peerPrivateAddress,
+      privateKey: keyBase64,
     };
-    const response = await this.axiosClient.post(`/${keyId}`, requestBody);
+    const response = await this.axiosClient.post(`/${keyId}`, { data });
     if (response.status !== 200 && response.status !== 204) {
       throw new VaultStoreError(
         `Vault returned a ${response.status} response`,
         response.data.errors,
       );
     }
+  }
+
+  private async retrieveData(keyId: string): Promise<KeyDataDecoded | null> {
+    const response = await this.axiosClient.get(`/${keyId}`);
+
+    if (response.status === 404) {
+      return null;
+    }
+    if (response.status !== 200) {
+      throw new VaultStoreError(
+        `Vault returned a ${response.status} response`,
+        response.data.errors,
+      );
+    }
+
+    const vaultData = response.data.data.data as KeyDataEncoded;
+    return {
+      peerPrivateAddress: vaultData.peerPrivateAddress,
+      privateKey: base64Decode(vaultData.privateKey),
+    };
   }
 }
 

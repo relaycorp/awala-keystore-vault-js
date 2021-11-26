@@ -1,9 +1,9 @@
 import {
   derSerializePrivateKey,
-  generateECDHKeyPair,
   generateRSAKeyPair,
   getPrivateAddressFromIdentityKey,
   PrivateKeyStoreError,
+  SessionKeyPair,
   UnknownKeyError,
 } from '@relaycorp/relaynet-core';
 import axios, { AxiosRequestConfig } from 'axios';
@@ -11,7 +11,7 @@ import * as http from 'http';
 import * as https from 'https';
 
 import { expectBuffersToEqual, expectPromiseToReject, getPromiseRejection } from './_test_utils';
-import { base64Encode } from './utils';
+import { base64Encode } from './base64';
 import { VaultPrivateKeyStore } from './vaultPrivateKeyStore';
 
 describe('VaultPrivateKeyStore', () => {
@@ -30,14 +30,15 @@ describe('VaultPrivateKeyStore', () => {
   const TOMORROW = new Date();
   TOMORROW.setDate(TOMORROW.getDate() + 1);
 
-  const sessionKeyId = Buffer.from([9, 7, 5, 3, 1]);
-  let sessionKeyPair: CryptoKeyPair;
+  let sessionKeyPair: SessionKeyPair;
+  let sessionKeyIdHex: string;
   let identityPrivateKey: CryptoKey;
   let privateAddress: string;
   let recipientKeyPair: CryptoKeyPair;
   let recipientPrivateAddress: string;
   beforeAll(async () => {
-    sessionKeyPair = await generateECDHKeyPair();
+    sessionKeyPair = await SessionKeyPair.generate();
+    sessionKeyIdHex = sessionKeyPair.sessionKey.keyId.toString('hex');
 
     const senderKeyPair = await generateRSAKeyPair();
     identityPrivateKey = senderKeyPair.privateKey;
@@ -151,11 +152,11 @@ describe('VaultPrivateKeyStore', () => {
 
     test('Unbound session key should be stored', async () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
-      await store.saveUnboundSessionKey(sessionKeyPair.privateKey, sessionKeyId);
+      await store.saveUnboundSessionKey(sessionKeyPair.privateKey, sessionKeyPair.sessionKey.keyId);
 
       expect(mockAxiosClient.post).toBeCalledTimes(1);
       const postCallArgs = mockAxiosClient.post.mock.calls[0];
-      expect(postCallArgs[0]).toEqual(`/s-${sessionKeyId.toString('hex')}`);
+      expect(postCallArgs[0]).toEqual(`/s-${sessionKeyIdHex}`);
       expect(postCallArgs[1]).toHaveProperty(
         'data.privateKey',
         base64Encode(await derSerializePrivateKey(sessionKeyPair.privateKey)),
@@ -167,13 +168,13 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
       await store.saveBoundSessionKey(
         sessionKeyPair.privateKey,
-        sessionKeyId,
+        sessionKeyPair.sessionKey.keyId,
         recipientPrivateAddress,
       );
 
       expect(mockAxiosClient.post).toBeCalledTimes(1);
       const postCallArgs = mockAxiosClient.post.mock.calls[0];
-      expect(postCallArgs[0]).toEqual(`/s-${sessionKeyId.toString('hex')}`);
+      expect(postCallArgs[0]).toEqual(`/s-${sessionKeyIdHex}`);
       expect(postCallArgs[1]).toHaveProperty(
         'data.privateKey',
         base64Encode(await derSerializePrivateKey(sessionKeyPair.privateKey)),
@@ -241,77 +242,95 @@ describe('VaultPrivateKeyStore', () => {
 
     beforeEach(async () => {
       mockAxiosClient.get.mockReset();
-      mockAxiosClient.get.mockResolvedValue(
-        makeVaultGETResponse(
-          {
-            peerPrivateAddress: recipientPrivateAddress,
-            privateKey: base64Encode(await derSerializePrivateKey(sessionKeyPair.privateKey)),
-            type: 'session-subsequent',
-          },
-          200,
-        ),
-      );
 
       mockAxiosCreate.mockReturnValueOnce(mockAxiosClient as any);
     });
 
-    test('Endpoint path should be the key id', async () => {
+    test('Existing identity key should be returned', async () => {
+      mockAxiosClient.get.mockResolvedValue(
+        makeVaultGETResponse(
+          {
+            privateKey: base64Encode(await derSerializePrivateKey(identityPrivateKey)),
+          },
+          200,
+        ),
+      );
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
-      await store.fetchSessionKey(sessionKeyId, recipientPrivateAddress);
+      const privateKey = await store.retrieveIdentityKey(privateAddress);
 
       expect(mockAxiosClient.get).toBeCalledTimes(1);
       const getCallArgs = mockAxiosClient.get.mock.calls[0];
-      expect(getCallArgs[0]).toEqual(`/${sessionKeyId.toString('hex')}`);
+      expect(getCallArgs[0]).toEqual(`/i-${privateAddress}`);
+      expectBuffersToEqual(
+        await derSerializePrivateKey(privateKey),
+        await derSerializePrivateKey(identityPrivateKey),
+      );
     });
 
-    test('Private key should be returned', async () => {
+    test('Existing unbound session key should be returned', async () => {
+      mockAxiosClient.get.mockResolvedValue(
+        makeVaultGETResponse(
+          {
+            privateKey: base64Encode(await derSerializePrivateKey(sessionKeyPair.privateKey)),
+          },
+          200,
+        ),
+      );
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
-      const privateKey = await store.fetchSessionKey(sessionKeyId, recipientPrivateAddress);
+      const privateKey = await store.retrieveInitialSessionKey(sessionKeyPair.sessionKey.keyId);
 
+      expect(mockAxiosClient.get).toBeCalledTimes(1);
+      const getCallArgs = mockAxiosClient.get.mock.calls[0];
+      expect(getCallArgs[0]).toEqual(`/s-${sessionKeyIdHex}`);
       expectBuffersToEqual(
         await derSerializePrivateKey(privateKey),
         await derSerializePrivateKey(sessionKeyPair.privateKey),
       );
     });
 
-    test('Key type should be returned', async () => {
-      const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
-
-      // We can tell the type was returned because it was checked
-      await expect(store.retrieveIdentityKey(privateAddress)).rejects.toMatchObject({
-        message: expect.stringMatching(/is not a node key/),
-      });
-    });
-
-    test('Session key should not be returned if bound to another recipient', async () => {
-      const peerPrivateAddress = await getPrivateAddressFromIdentityKey(recipientKeyPair.publicKey);
+    test('Existing bound session key should be returned', async () => {
       mockAxiosClient.get.mockResolvedValue(
         makeVaultGETResponse(
           {
-            peerPrivateAddress,
+            peerPrivateAddress: recipientPrivateAddress,
             privateKey: base64Encode(await derSerializePrivateKey(sessionKeyPair.privateKey)),
-            type: 'session-subsequent',
           },
           200,
         ),
       );
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
-      const differentRecipientKeyPair = await generateRSAKeyPair();
-      const differentPeerPrivateAddress = await getPrivateAddressFromIdentityKey(
-        differentRecipientKeyPair.publicKey,
+      const privateKey = await store.fetchSessionKey(
+        sessionKeyPair.sessionKey.keyId,
+        recipientPrivateAddress,
       );
-      // We can tell the digest was returned because it was checked:
-      await expect(
-        store.fetchSessionKey(sessionKeyId, differentPeerPrivateAddress),
-      ).rejects.toEqual(
-        new UnknownKeyError(
-          `Session key ${sessionKeyId.toString('hex')} is bound to another recipient ` +
-            `(${peerPrivateAddress}, not ${differentPeerPrivateAddress})`,
+
+      expect(mockAxiosClient.get).toBeCalledTimes(1);
+      const getCallArgs = mockAxiosClient.get.mock.calls[0];
+      expect(getCallArgs[0]).toEqual(`/s-${sessionKeyIdHex}`);
+      expectBuffersToEqual(
+        await derSerializePrivateKey(privateKey),
+        await derSerializePrivateKey(sessionKeyPair.privateKey),
+      );
+    });
+
+    test('Session key should not be returned if bound to another recipient', async () => {
+      mockAxiosClient.get.mockResolvedValue(
+        makeVaultGETResponse(
+          {
+            peerPrivateAddress: `not-${recipientPrivateAddress}`,
+            privateKey: base64Encode(await derSerializePrivateKey(sessionKeyPair.privateKey)),
+          },
+          200,
         ),
       );
+      const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
+
+      await expect(
+        store.fetchSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
+      ).rejects.toBeInstanceOf(UnknownKeyError);
     });
 
     test('Axios errors should be wrapped', async () => {
@@ -319,7 +338,7 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expectPromiseToReject(
-        store.fetchSessionKey(sessionKeyId, recipientPrivateAddress),
+        store.fetchSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
         new PrivateKeyStoreError(`Failed to retrieve key: Denied`),
       );
     });
@@ -329,7 +348,7 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expect(
-        store.fetchSessionKey(sessionKeyId, recipientPrivateAddress),
+        store.fetchSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
       ).rejects.toBeInstanceOf(UnknownKeyError);
     });
 
@@ -338,7 +357,7 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expectPromiseToReject(
-        store.fetchSessionKey(sessionKeyId, recipientPrivateAddress),
+        store.fetchSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
         new PrivateKeyStoreError(`Failed to retrieve key: Vault returned a 204 response`),
       );
     });
@@ -349,7 +368,7 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expectPromiseToReject(
-        store.fetchSessionKey(sessionKeyId, recipientPrivateAddress),
+        store.fetchSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
         new PrivateKeyStoreError(
           `Failed to retrieve key: Vault returned a 204 response (${errorMessages.join(', ')})`,
         ),
