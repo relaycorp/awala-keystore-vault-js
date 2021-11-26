@@ -43,7 +43,7 @@
     "url": "https://github.com/relaycorp/keystore-vault-js/issues"
   },
   "engines": {
-    "node": ">=10"
+    "node": ">=12"
   },
   "homepage": "https://docs.relaycorp.tech/keystore-vault-js/",
   "prettier": "@relaycorp/shared-config/.prettierrc.json",
