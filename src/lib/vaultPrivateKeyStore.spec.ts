@@ -279,7 +279,7 @@ describe('VaultPrivateKeyStore', () => {
       );
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
-      const privateKey = await store.retrieveInitialSessionKey(sessionKeyPair.sessionKey.keyId);
+      const privateKey = await store.retrieveUnboundSessionKey(sessionKeyPair.sessionKey.keyId);
 
       expect(mockAxiosClient.get).toBeCalledTimes(1);
       const getCallArgs = mockAxiosClient.get.mock.calls[0];
@@ -302,7 +302,7 @@ describe('VaultPrivateKeyStore', () => {
       );
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
-      const privateKey = await store.fetchSessionKey(
+      const privateKey = await store.retrieveSessionKey(
         sessionKeyPair.sessionKey.keyId,
         recipientPrivateAddress,
       );
@@ -329,7 +329,7 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expect(
-        store.fetchSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
+        store.retrieveSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
       ).rejects.toBeInstanceOf(UnknownKeyError);
     });
 
@@ -347,7 +347,7 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expect(
-        store.fetchSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
+        store.retrieveSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
       ).rejects.toBeInstanceOf(UnknownKeyError);
     });
 
@@ -356,7 +356,7 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expectPromiseToReject(
-        store.fetchSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
+        store.retrieveSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
         new PrivateKeyStoreError(`Failed to retrieve key: Denied`),
       );
     });
@@ -366,7 +366,7 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expectPromiseToReject(
-        store.fetchSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
+        store.retrieveSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
         new PrivateKeyStoreError(`Failed to retrieve key: Vault returned a 204 response`),
       );
     });
@@ -377,7 +377,7 @@ describe('VaultPrivateKeyStore', () => {
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
       await expectPromiseToReject(
-        store.fetchSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
+        store.retrieveSessionKey(sessionKeyPair.sessionKey.keyId, recipientPrivateAddress),
         new PrivateKeyStoreError(
           `Failed to retrieve key: Vault returned a 204 response (${errorMessages.join(', ')})`,
         ),
