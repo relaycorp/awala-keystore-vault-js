@@ -68,7 +68,7 @@
   },
   "dependencies": {
     "@relaycorp/relaynet-core": "^1.57.3",
-    "axios": "^0.24.0"
+    "axios": "^0.25.0"
   },
   "peerDependencies": {
     "@relaycorp/relaynet-core": ">= 1.27.0 < 2"
