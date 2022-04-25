@@ -263,7 +263,7 @@ describe('VaultPrivateKeyStore', () => {
       const getCallArgs = mockAxiosClient.get.mock.calls[0];
       expect(getCallArgs[0]).toEqual(`/i-${privateAddress}`);
       expectBuffersToEqual(
-        await derSerializePrivateKey(privateKey),
+        await derSerializePrivateKey(privateKey!),
         await derSerializePrivateKey(identityPrivateKey),
       );
     });
@@ -337,9 +337,7 @@ describe('VaultPrivateKeyStore', () => {
       mockAxiosClient.get.mockResolvedValue({ status: 404 });
       const store = new VaultPrivateKeyStore(stubVaultUrl, stubVaultToken, stubKvPath);
 
-      await expect(store.retrieveIdentityKey(privateAddress)).rejects.toBeInstanceOf(
-        UnknownKeyError,
-      );
+      await expect(store.retrieveIdentityKey(privateAddress)).resolves.toBeNull();
     });
 
     test('Non-existing session key should raise an UnknownKeyError', async () => {
