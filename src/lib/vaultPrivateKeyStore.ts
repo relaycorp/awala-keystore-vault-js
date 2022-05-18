@@ -1,30 +1,43 @@
 /* tslint:disable:max-classes-per-file */
 
-import { PrivateKeyStore, SessionPrivateKeyData } from '@relaycorp/relaynet-core';
+import {
+  derDeserializeRSAPrivateKey,
+  derSerializePrivateKey,
+  PrivateKeyStore,
+  SessionPrivateKeyData,
+} from '@relaycorp/relaynet-core';
 import axios, { AxiosInstance } from 'axios';
 import { Agent as HttpAgent } from 'http';
 import { Agent as HttpsAgent } from 'https';
 
 import { base64Decode, base64Encode } from './base64';
+import { VaultStoreError } from './VaultStoreError';
 
-class VaultStoreError extends Error {
-  constructor(message: string, responseErrorMessages?: readonly string[]) {
-    const finalErrorMessage = responseErrorMessages
-      ? `${message} (${responseErrorMessages.join(', ')})`
-      : message;
-    super(finalErrorMessage);
-  }
-}
-
-interface KeyDataEncoded {
+interface BaseKeyDataEncoded {
   readonly privateKey: string;
+}
+
+interface IdentityKeyDataEncoded extends BaseKeyDataEncoded {}
+
+interface SessionKeyDataEncoded extends BaseKeyDataEncoded {
+  readonly privateAddress: string;
   readonly peerPrivateAddress?: string;
 }
 
-interface KeyDataDecoded {
+type KeyDataEncoded = IdentityKeyDataEncoded | SessionKeyDataEncoded;
+
+interface BaseKeyDataDecoded {
   readonly privateKey: Buffer;
-  readonly peerPrivateAddress?: string;
 }
+
+interface IdentityKeyDataDecoded extends BaseKeyDataDecoded {}
+
+interface SessionKeyDataDecoded extends BaseKeyDataDecoded {
+  readonly peerPrivateAddress: string;
+  readonly privateAddress: string;
+}
+
+type KeyDataDecoded = IdentityKeyDataDecoded | SessionKeyDataDecoded;
 
 export class VaultPrivateKeyStore extends PrivateKeyStore {
   protected readonly axiosClient: AxiosInstance;
@@ -49,24 +62,45 @@ export class VaultPrivateKeyStore extends PrivateKeyStore {
     );
   }
 
-  protected async saveIdentityKeySerialized(
-    privateAddress: string,
-    keySerialized: Buffer,
-  ): Promise<void> {
+  protected async saveIdentityKey(privateAddress: string, privateKey: CryptoKey): Promise<void> {
+    const keySerialized = await derSerializePrivateKey(privateKey);
     await this.saveData(keySerialized, `i-${privateAddress}`);
   }
 
   protected async saveSessionKeySerialized(
     keyId: string,
     keySerialized: Buffer,
+    privateAddress: string,
     peerPrivateAddress?: string,
   ): Promise<void> {
-    await this.saveData(keySerialized, `s-${keyId}`, peerPrivateAddress);
+    await this.saveData(keySerialized, `s-${keyId}`, {
+      peerPrivateAddress,
+      privateAddress,
+    });
   }
 
-  protected async retrieveIdentityKeySerialized(privateAddress: string): Promise<Buffer | null> {
+  public async retrieveIdentityKey(privateAddress: string): Promise<CryptoKey | null> {
     const keyData = await this.retrieveData(`i-${privateAddress}`);
-    return keyData?.privateKey ?? null;
+    if (!keyData?.privateKey) {
+      return null;
+    }
+    return derDeserializeRSAPrivateKey(keyData.privateKey);
+  }
+
+  private async saveData(
+    keySerialized: Buffer,
+    keyId: string,
+    keyData: Omit<KeyDataEncoded, 'privateKey'> = {},
+  ): Promise<void> {
+    const keyBase64 = base64Encode(keySerialized);
+    const data: KeyDataEncoded = { privateKey: keyBase64, ...keyData };
+    const response = await this.axiosClient.post(`/${keyId}`, { data });
+    if (response.status !== 200 && response.status !== 204) {
+      throw new VaultStoreError(
+        `Vault returned a ${response.status} response`,
+        response.data.errors,
+      );
+    }
   }
 
   protected async retrieveSessionKeyData(keyId: string): Promise<SessionPrivateKeyData | null> {
@@ -76,27 +110,9 @@ export class VaultPrivateKeyStore extends PrivateKeyStore {
     }
     return {
       keySerialized: keyData.privateKey,
-      peerPrivateAddress: keyData.peerPrivateAddress,
+      peerPrivateAddress: (keyData as SessionKeyDataDecoded).peerPrivateAddress,
+      privateAddress: (keyData as SessionKeyDataDecoded).privateAddress,
     };
-  }
-
-  private async saveData(
-    keySerialized: Buffer,
-    keyId: string,
-    peerPrivateAddress?: string,
-  ): Promise<void> {
-    const keyBase64 = base64Encode(keySerialized);
-    const data: KeyDataEncoded = {
-      peerPrivateAddress,
-      privateKey: keyBase64,
-    };
-    const response = await this.axiosClient.post(`/${keyId}`, { data });
-    if (response.status !== 200 && response.status !== 204) {
-      throw new VaultStoreError(
-        `Vault returned a ${response.status} response`,
-        response.data.errors,
-      );
-    }
   }
 
   private async retrieveData(keyId: string): Promise<KeyDataDecoded | null> {
@@ -114,7 +130,8 @@ export class VaultPrivateKeyStore extends PrivateKeyStore {
 
     const vaultData = response.data.data.data as KeyDataEncoded;
     return {
-      peerPrivateAddress: vaultData.peerPrivateAddress,
+      peerPrivateAddress: (vaultData as SessionKeyDataEncoded).peerPrivateAddress,
+      privateAddress: (vaultData as SessionKeyDataEncoded).privateAddress,
       privateKey: base64Decode(vaultData.privateKey),
     };
   }
