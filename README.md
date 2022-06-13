@@ -1,5 +1,7 @@
 # keystore-vault-js
 
+**Superseded by https://github.com/relaycorp/awala-keystore-cloud-js**
+
 [Vault](https://www.vaultproject.io)-based Private Key Store extension for server-side, Node.js-based applications implementing Relaynet -- For example, public endpoints.
 
 ## Install
